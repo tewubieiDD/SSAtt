@@ -1,0 +1,366 @@
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from SSAtt.spd import SPDTransform, SPDTangentSpace, SPDRectified
+
+
+class signal2spd(nn.Module):
+    # convert signal epoch to SPD matrix
+    def __init__(self):
+        super().__init__()
+        self.dev = torch.device('cpu')
+
+    def forward(self, x):
+        x = x.squeeze()
+        mean = x.mean(axis=-1).unsqueeze(-1).repeat(1, 1, x.shape[-1])
+        x = x - mean
+        cov = x @ x.permute(0, 2, 1)
+        cov = cov.to(self.dev)
+        cov = cov / (x.shape[-1] - 1)
+        tra = cov.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)
+        tra = tra.view(-1, 1, 1)
+        cov /= tra
+        identity = torch.eye(cov.shape[-1], cov.shape[-1], device=self.dev).to(self.dev).repeat(x.shape[0], 1, 1)
+        cov = cov + (1e-5 * identity)
+        return cov
+
+
+class E2R(nn.Module):
+    def __init__(self, epochs):
+        super().__init__()
+        self.epochs = epochs
+        self.signal2spd = signal2spd()
+
+    def patch_len(self, n, epochs):
+        list_len = []
+        base = n // epochs
+        for i in range(epochs):
+            list_len.append(base)
+        for i in range(n - base * epochs):
+            list_len[i] += 1
+
+        if sum(list_len) == n:
+            return list_len
+        else:
+            return ValueError('check your epochs and axis should be split again')
+
+    def forward(self, x):
+        # x with shape[bs, ch, time]
+        list_patch = self.patch_len(x.shape[-1], int(self.epochs))
+        x_list = list(torch.split(x, list_patch, dim=-1))
+        for i, item in enumerate(x_list):
+            x_list[i] = self.signal2spd(item)
+        x = torch.stack(x_list).permute(1, 0, 2, 3)
+        return x
+
+
+class SubManifold(nn.Module):
+    def __init__(self, ks, s=1):
+        super().__init__()
+        self.ks = ks if isinstance(ks, list) else [ks]
+        self.s = s
+
+    def _extract_submatrices(self, x, k, s):
+        bs, n, _ = x.size()
+        d = int(math.sqrt(n))
+
+        outsize = (d - k) // s + 1
+        num_windows = outsize * outsize
+        device = x.device
+        dtype = torch.long
+
+        start_indices = torch.arange(0, d - k + 1, step=s, device=device, dtype=dtype)
+        grid_ir, grid_ic = torch.meshgrid(start_indices, start_indices, indexing="ij")
+        grid_ir, grid_ic = grid_ir.flatten(), grid_ic.flatten()
+
+        rel_range = torch.arange(k, device=device, dtype=dtype)
+        rel_a, rel_b = torch.meshgrid(rel_range, rel_range, indexing="ij")
+        rel_indices = (rel_a * d + rel_b).flatten()
+
+        idx = grid_ir.unsqueeze(1) * d + grid_ic.unsqueeze(1) + rel_indices.unsqueeze(0)
+        idx_batch = idx.unsqueeze(0).expand(bs, -1, -1)
+        idx_rows = idx_batch.reshape(bs, num_windows * k * k).unsqueeze(-1).expand(-1, -1, n)
+        sub_rows = torch.gather(x, dim=1, index=idx_rows).view(bs, num_windows, k * k, n)
+        idx_cols = idx_batch.unsqueeze(2).expand(-1, -1, k * k, -1)
+        submatrices = torch.gather(sub_rows, dim=3, index=idx_cols)
+
+        return submatrices
+
+    def forward(self, x):
+        xs = []
+
+        for k in self.ks:
+            sub_x = self._extract_submatrices(x, k, self.s)
+            xs.append(sub_x)
+
+        return xs
+
+
+class SubmanifoldAttention(nn.Module):
+    def __init__(self, in_dims, qk_dim, v_dim, num):
+        super(SubmanifoldAttention, self).__init__()
+
+        self.in_dims = in_dims
+        self.qk_dim = qk_dim
+        self.v_dim = v_dim
+        q_trans, k_trans, v_trans = [], [], []
+        for i in range(len(in_dims)):
+            q_trans.append(SPDTransform(self.in_dims[i], self.qk_dim).cpu())
+            k_trans.append(SPDTransform(self.in_dims[i], self.qk_dim).cpu())
+            v_trans.append(SPDTransform(self.in_dims[i], self.v_dim).cpu())
+        self.q_trans, self.k_trans, self.v_trans = nn.ModuleList(q_trans), nn.ModuleList(k_trans), nn.ModuleList(
+            v_trans)
+
+        self.w = nn.Parameter(torch.zeros(num))
+
+    def tensor_log(self, t, epsilon=1e-6):  # 4dim
+        t.diagonal(dim1=-2, dim2=-1).add_(torch.rand_like(t.diagonal(dim1=-2, dim2=-1)) * epsilon)
+        u, s, v = torch.svd(t)
+        return u @ torch.diag_embed(torch.log(s)) @ v.permute(0, 1, 3, 2)
+
+    def tensor_exp(self, t):  # 4dim
+        # condition: t is symmetric!
+        s, u = torch.linalg.eigh(t)
+        return u @ torch.diag_embed(torch.exp(s)) @ u.permute(0, 1, 3, 2)
+
+    def log_euclidean_distance(self, A, B):
+        inner_term = self.tensor_log(A) - self.tensor_log(B)
+        inner_multi = inner_term @ inner_term.permute(0, 1, 3, 2)
+        _, s, _ = torch.svd(inner_multi)
+        final = torch.sum(s, dim=-1)
+        return final
+
+    def LogEuclideanMean(self, weight, cov):
+        # cov:[bs, #p, s, s]
+        # weight:[bs, #p, #p]
+        bs = cov.shape[0]
+        num_p = cov.shape[1]
+        size = cov.shape[2]
+        cov = self.tensor_log(cov).view(bs, num_p, -1)
+        output = weight @ cov  # [bs, #p, -1]
+        output = output.view(bs, num_p, size, size)
+        return self.tensor_exp(output)
+
+    def fm(self, cov):
+        bs, p, s, _ = cov.shape
+        cov_log = self.tensor_log(cov)
+        w = torch.ones(p).to(dtype=cov.dtype, device=cov.device).view(1, p, 1, 1)
+        out = (cov_log * w).sum(dim=1)  # [bs, s, s]
+        out = out.div(p).unsqueeze(1)
+        return self.tensor_exp(out).squeeze(1)
+
+    def wfm(self, cov):
+        bs, p, s, _ = cov.shape
+        cov_log = self.tensor_log(cov)
+        soft_w = F.softmax(self.w, dim=0)
+        soft_w = soft_w.view(1, p, 1, 1)
+        out = (cov_log * soft_w).sum(dim=1, keepdim=True)  # [bs, s, s]
+        return self.tensor_exp(out).squeeze(1)
+
+    def forward(self, x):
+        Q = [];
+        K = [];
+        V = []
+        # calculate Q K V
+        for i in range(len(x)):
+            bs = x[i].shape[0]
+            m = x[i].shape[1]
+            tmp_x = x[i].reshape(bs * m, self.in_dims[i], self.in_dims[i])
+            q = self.q_trans[i](tmp_x).view(bs, m, self.qk_dim, self.qk_dim)
+            k = self.k_trans[i](tmp_x).view(bs, m, self.qk_dim, self.qk_dim)
+            v = self.v_trans[i](tmp_x).view(bs, m, self.v_dim, self.v_dim)
+            Q.append(q);
+            K.append(k);
+            V.append(v)
+        Q = torch.cat(Q, dim=1)
+        K = torch.cat(K, dim=1)
+        V = torch.cat(V, dim=1)
+
+        # calculate the attention score
+        Q_expand = Q.repeat(1, V.shape[1], 1, 1)
+
+        K_expand = K.unsqueeze(2).repeat(1, 1, V.shape[1], 1, 1)
+        K_expand = K_expand.view(K_expand.shape[0], K_expand.shape[1] * K_expand.shape[2], K_expand.shape[3],
+                                 K_expand.shape[4])
+
+        atten_energy = self.log_euclidean_distance(Q_expand, K_expand).view(V.shape[0], V.shape[1], V.shape[1])
+        atten_prob = nn.Softmax(dim=-2)(1 / (1 + torch.log(1 + atten_energy))).permute(0, 2, 1)  # now row is c.c.
+
+        # calculate outputs(v_i') of attention module
+        output = self.LogEuclideanMean(atten_prob, V)
+
+        output = output.view(V.shape[0], V.shape[1], self.v_dim, self.v_dim)
+
+        output = self.wfm(output)
+
+        shape = list(output.shape[:2])
+
+        return output, shape
+
+
+class SSAtt_bci(nn.Module):
+    def __init__(self, epochs):
+        super().__init__()
+        # FE
+        # bs, 1, channel, sample
+        self.conv1 = nn.Conv2d(1, 22, (22, 1))
+        self.Bn1 = nn.BatchNorm2d(22)
+        # bs, 22, 1, sample
+        self.conv2 = nn.Conv2d(22, 25, (1, 12), padding=(0, 6))
+        self.Bn2 = nn.BatchNorm2d(25)
+
+        # E2R
+        self.ract1 = E2R(epochs=epochs)
+
+        # riemannian part 1
+        self.subcov = SubManifold([2, 5])
+        self.att1 = SubmanifoldAttention([4, 25], 4, 20, 17)
+        self.att2 = SubmanifoldAttention([4, 25], 4, 20, 17)
+        self.att3 = SubmanifoldAttention([4, 25], 4, 20, 17)
+        self.att = SubmanifoldAttention([20], 18, 18, 3)
+        self.ract2 = SPDRectified()
+
+        # R2E
+        self.tangent = SPDTangentSpace(18)
+        # fc
+        self.linear = nn.Linear(9 * 19, 4, bias=True)
+
+        # # riemannian part 2
+        # self.subcov = SubManifold([2, 4])
+        # self.att2 = SubmanifoldAttention([4, 16, 4, 16, 4, 16], 4, 16, 30)
+        # self.ract2 = SPDRectified()
+        #
+        # # R2E
+        # self.tangent = SPDTangentSpace(16)
+        # # fc
+        # self.linear = nn.Linear(8 * 17, 4, bias=True)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.Bn1(x)
+        x = self.conv2(x)
+        x = self.Bn2(x)
+
+        x = self.ract1(x)
+        x1 = self.subcov(x[:, 0, :, :])
+        x2 = self.subcov(x[:, 1, :, :])
+        x3 = self.subcov(x[:, 2, :, :])
+        x1, shape1 = self.att1(x1)
+        x2, shape2 = self.att2(x2)
+        x3, shape3 = self.att3(x3)
+        x = torch.stack([x1, x2, x3], dim=1)
+        x, shape = self.att([x])
+        x = self.ract2(x)
+
+        # x = self.ract1(x)
+        # x1 = self.subcov(x[:, 0, :, :])
+        # x2 = self.subcov(x[:, 1, :, :])
+        # x1.extend(x2)
+        # x3 = self.subcov(x[:, 2, :, :])
+        # x1.extend(x3)
+        # x, shape = self.att2(x1)
+        # x = self.ract2(x)
+
+        x = self.tangent(x)
+        x = x.view(shape[0], -1)
+        x = self.linear(x)
+        return x
+
+
+class SSAtt_mamem(nn.Module):
+    def __init__(self, epochs):
+        super().__init__()
+        # FE
+        # bs, 1, channel, sample
+        self.conv1 = nn.Conv2d(1, 125, (8, 1))
+        self.Bn1 = nn.BatchNorm2d(125)
+        # bs, 8, 1, sample
+        self.conv2 = nn.Conv2d(125, 16, (1, 36), padding=(0, 18))
+        self.Bn2 = nn.BatchNorm2d(16)
+
+        # E2R
+        self.ract1 = E2R(epochs)
+        # riemannian part
+        self.subcov = SubManifold([2, 4])
+        self.att2 = SubmanifoldAttention([4, 16, 4, 16, 4, 16, 4, 16, 4, 16, 4, 16, 4, 16], 4, 12, 70)
+        self.ract2 = SPDRectified()
+        # R2E
+        self.tangent = SPDTangentSpace(12)
+        self.flat = nn.Flatten()
+        # fc
+        self.linear = nn.Linear(6 * 13, 5, bias=True)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.Bn1(x)
+        x = self.conv2(x)
+        x = self.Bn2(x)
+
+        x = self.ract1(x)
+        x1 = self.subcov(x[:, 0, :, :])
+        x2 = self.subcov(x[:, 1, :, :])
+        x1.extend(x2)
+        x3 = self.subcov(x[:, 2, :, :])
+        x1.extend(x3)
+        x4 = self.subcov(x[:, 3, :, :])
+        x1.extend(x4)
+        x5 = self.subcov(x[:, 4, :, :])
+        x1.extend(x5)
+        x6 = self.subcov(x[:, 5, :, :])
+        x1.extend(x6)
+        x7 = self.subcov(x[:, 6, :, :])
+        x1.extend(x7)
+        x, shape = self.att2(x1)
+        x = self.ract2(x)
+
+        x = self.tangent(x)
+        x = self.flat(x)
+        x = self.linear(x)
+        return x
+
+
+class SSAtt_cha(nn.Module):
+    def __init__(self, epochs):
+        super().__init__()
+        # FE
+        # bs, 1, channel, sample
+        self.conv1 = nn.Conv2d(1, 22, (56, 1))
+        self.Bn1 = nn.BatchNorm2d(22)
+        # bs, 56, 1, sample
+        self.conv2 = nn.Conv2d(22, 16, (1, 64), padding=(0, 32))
+        self.Bn2 = nn.BatchNorm2d(16)
+
+        # E2R
+        self.ract1 = E2R(epochs=epochs)
+        # riemannian part
+        self.subcov = SubManifold([2, 4])
+        self.att2 = SubmanifoldAttention([4, 16, 4, 16, 4, 16], 4, 8, 30)
+        self.ract2 = SPDRectified()
+
+        # R2E
+        self.tangent = SPDTangentSpace(8)
+        self.flat = nn.Flatten()
+        # fc
+        self.linear = nn.Linear(4 * 9, 2, bias=True)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.Bn1(x)
+        x = self.conv2(x)
+        x = self.Bn2(x)
+
+        x = self.ract1(x)
+        x1 = self.subcov(x[:, 0, :, :])
+        x2 = self.subcov(x[:, 1, :, :])
+        x1.extend(x2)
+        x3 = self.subcov(x[:, 2, :, :])
+        x1.extend(x3)
+        x, shape = self.att2(x1)
+        x = self.ract2(x)
+
+        x = self.tangent(x)
+        x = self.flat(x)
+        x = self.linear(x)
+        return x

@@ -39,7 +39,7 @@ class ResultAnalyzer:
             if model_name == target_model and dataset_name == target_dataset:
                 test_acc_list = metrics.get('test_acc', [])
 
-                valid_accs = [a for a in test_acc_list if a is not None]
+                valid_accs = [acc for acc in test_acc_list if acc is not None and acc > 0]
                 if valid_accs:
                     final_acc = valid_accs[-1]
                     # 如果同一个受试者跑了多次，这里可以根据需要保留最新的一次或报错
