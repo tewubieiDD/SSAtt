@@ -17,6 +17,7 @@ def trainNetwork(net, trainloader, validloader, testloader, recorder, model_path
     optimizer = MixOptimizer(optimizer)
     bestLoss = 1e10
     val_len = len(validloader)
+    test_acc = 0
 
     for ite in range(iterations):
         net.train()
@@ -48,7 +49,7 @@ def trainNetwork(net, trainloader, validloader, testloader, recorder, model_path
         recorder.logger.info(f'train_loss:{loss:.4f}    val_loss:{TL / val_len:.4f}')
         recorder.logger.info(f'train_acc:{acc_tr / tr_len:.4f}    val_acc:{acc_val / val_len:.4f}')
 
-        test_acc = 0
+        # test_acc = 0
         if TL < bestLoss:
             bestLoss = TL
             final_path = os.path.join(recorder.exp_dir, 'best_model.pt')
@@ -66,7 +67,7 @@ def trainNetwork(net, trainloader, validloader, testloader, recorder, model_path
             "test_acc": test_acc
         }
         recorder.log_iteration(epoch_metrics)
-    net = torch.load(os.path.join(recorder.exp_dir, 'best_model.pt'))
+    net = torch.load(os.path.join(recorder.exp_dir, 'best_model.pt'), weights_only=False)
     return net
 
 
@@ -96,3 +97,65 @@ def testNetwork_auc(net, testloader):
             y_true = torch.cat((y_true, yb), 0)
 
     return ras(y_true.detach().numpy(), y_pred.detach().numpy())
+
+
+def trainNetwork_auc(net, trainloader, validloader, testloader, recorder, model_path=None, iterations=500, lr=5 * 1e-4,
+                 wd=None, repeat=None, sub=None, epochs=None):
+    softmax = nn.Softmax(dim=1)
+    CE = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=wd)
+    optimizer = MixOptimizer(optimizer)
+    bestLoss = 1e10
+    val_len = len(validloader)
+    test_acc = 0
+
+    for ite in range(iterations):
+        net.train()
+        acc_val = 0
+        acc_tr = 0
+        tr_len = 0
+        for xb, yb in trainloader:
+            tr_len += yb.shape[0]
+            out = net(xb)
+            loss = CE(out, yb)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            acc_tr += (torch.max(out, 1).indices == yb).sum().item()
+
+        net.eval()
+        TL = 0
+        for xb, yb in validloader:
+            with torch.no_grad():
+                out = net(xb)
+                if torch.argmax(softmax(out)) == yb:
+                    acc_val += 1
+
+                TL += (CE(out, yb).item())
+
+        recorder.logger.info('')
+        recorder.logger.info(f'Iteration{ite}=====')
+        recorder.logger.info(f'train_loss:{loss:.4f}    val_loss:{TL / val_len:.4f}')
+        recorder.logger.info(f'train_acc:{acc_tr / tr_len:.4f}    val_acc:{acc_val / val_len:.4f}')
+
+        # test_acc = 0
+        if TL < bestLoss:
+            bestLoss = TL
+            final_path = os.path.join(recorder.exp_dir, 'best_model.pt')
+            recorder.logger.info(f'saving to {final_path}')
+            torch.save(net, final_path)
+            testnet = torch.load(final_path, weights_only=False)
+            test_acc = testNetwork_auc(testnet, testloader)
+            recorder.logger.info(f'test_acc:{test_acc}')
+
+        epoch_metrics = {
+            "train_loss": loss.item(),
+            "val_loss": TL / val_len,
+            "train_acc": acc_tr / tr_len,
+            "val_acc": acc_val / val_len,
+            "test_acc": test_acc
+        }
+        recorder.log_iteration(epoch_metrics)
+    net = torch.load(os.path.join(recorder.exp_dir, 'best_model.pt'), weights_only=False)
+    return net

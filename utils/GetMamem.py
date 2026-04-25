@@ -31,12 +31,12 @@ def getAllDataloader(subject, ratio=8, data_path='./data/MAMEM/', bs=64):
     x_test = x_test.double().to(dev)
     y_test = y_test.long().to(dev)
 
-    print(x_train.shape)
-    print(y_train.shape)
-    print(x_valid.shape)
-    print(y_valid.shape)
-    print(x_test.shape)
-    print(y_test.shape)
+    # print(x_train.shape)
+    # print(y_train.shape)
+    # print(x_valid.shape)
+    # print(y_valid.shape)
+    # print(x_test.shape)
+    # print(y_test.shape)
     
 
     train_dataset = Data.TensorDataset(x_train, y_train)

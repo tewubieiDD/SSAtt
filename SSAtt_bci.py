@@ -19,7 +19,7 @@ if __name__=='__main__':
     ap.add_argument('--model_path', type=str, default='./checkpoint/bci2a/', help='the folder path for saving the model')
     ap.add_argument('--data_path', type=str, default='data/BCICIV_2a_mat/', help='data path')
     ap.add_argument('--output_dir', type=str, default='outputs_lr/', help='output dir')
-    ap.add_argument('--model_name', type=str, default='SSAtt_MAtt')
+    ap.add_argument('--model_name', type=str, default='SSAtt_Res_MAtt')
     ap.add_argument('--dataset', type=str, default='MI', help='dataset name')
     args = vars(ap.parse_args())
 

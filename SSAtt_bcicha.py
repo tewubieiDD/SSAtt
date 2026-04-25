@@ -1,7 +1,7 @@
 import torch
 
 from SSAtt.models import build_model
-from utils import set_seed_thread, create_exp_dir, Recorder, trainNetwork, testNetwork_auc
+from utils import set_seed_thread, create_exp_dir, Recorder, trainNetwork, testNetwork_auc, trainNetwork_auc
 from utils.GetBCIcha import getAllDataloader
 import os
 import argparse
@@ -19,7 +19,7 @@ if __name__=='__main__':
     ap.add_argument('--model_path', type=str, default='./checkpoint/BCIcha/', help='the folder path for saving the model')
     ap.add_argument('--data_path', type=str, default='./data/BCIcha/', help='data path')
     ap.add_argument('--output_dir', type=str, default='outputs_lr/', help='output dir')
-    ap.add_argument('--model_name', type=str, default='SSAtt_MAtt')
+    ap.add_argument('--model_name', type=str, default='SSAtt_Res_MAtt')
     ap.add_argument('--dataset', type=str, default='ERN', help='dataset name')
     args = vars(ap.parse_args())
 
@@ -41,7 +41,7 @@ if __name__=='__main__':
     args.pop('output_dir')
     args.pop('model_name')
     args.pop('dataset')
-    trainNetwork(net, 
+    trainNetwork_auc(net,
                 trainloader, 
                 validloader, 
                 testloader,
