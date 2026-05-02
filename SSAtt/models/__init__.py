@@ -3,9 +3,12 @@ import importlib
 
 def build_model(model_name, dataset_name, epochs):
     dataset_to_class = {
-        'MI': 'SSAtt_bci',
-        'SSVEP': 'SSAtt_mamem',
-        'ERN': 'SSAtt_cha'
+        'MI': 'BciNet',
+        'SSVEP': 'MamenNet',
+        'ERN': 'ChaNet',
+        'CG': 'CgNet',
+        'MDSD': 'MdsdNet',
+        'FPHA': 'FphaNet'
     }
 
     if dataset_name not in dataset_to_class:

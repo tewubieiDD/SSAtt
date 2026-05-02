@@ -113,6 +113,10 @@ class SubmanifoldAttention(nn.Module):
         self.q_trans, self.k_trans, self.v_trans = nn.ModuleList(q_trans), nn.ModuleList(k_trans), nn.ModuleList(
             v_trans)
 
+    # def tensor_log(self, t):  # 4dim
+    #     u, s, v = torch.svd(t)
+    #     return u @ torch.diag_embed(torch.log(s)) @ v.permute(0, 1, 3, 2)
+
     def tensor_log(self, t, epsilon=1e-6):  # 4dim
         t.diagonal(dim1=-2, dim2=-1).add_(torch.rand_like(t.diagonal(dim1=-2, dim2=-1)) * epsilon)
         u, s, v = torch.svd(t)
@@ -259,7 +263,7 @@ class AttentionManifold(nn.Module):
         return output, shape
 
 
-class BciNet(nn.Module):
+class SSAtt_bci(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
@@ -312,7 +316,7 @@ class BciNet(nn.Module):
         return x
 
 
-class MamemNet(nn.Module):
+class SSAtt_mamem(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
@@ -377,7 +381,7 @@ class MamemNet(nn.Module):
         return x
 
 
-class ChaNet(nn.Module):
+class SSAtt_cha(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
@@ -430,13 +434,11 @@ class ChaNet(nn.Module):
         return x
 
 
-class CgNet3(nn.Module):
+class SSAtt_cg(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
-        self.trans11 = SPDTransform(100, 81)
-        self.trans12 = SPDTransform(100, 81)
-        self.trans13 = SPDTransform(100, 81)
+        self.trans1 = SPDTransform(100, 81)
         self.trans21 = SPDTransform(81, 49)
         self.trans22 = SPDTransform(81, 49)
         self.trans23 = SPDTransform(81, 49)
@@ -446,9 +448,6 @@ class CgNet3(nn.Module):
         self.trans34 = SPDTransform(49, 25)
 
         # SubManifold
-        self.subcov11 = SubManifold([2])
-        self.subcov12 = SubManifold([8])
-        self.subcov13 = SubManifold([9])
         self.subcov21 = SubManifold([2])
         self.subcov22 = SubManifold([6])
         self.subcov23 = SubManifold([7])
@@ -458,9 +457,8 @@ class CgNet3(nn.Module):
         self.subcov34 = SubManifold([5])
 
         # Att
-        self.satt1 = SubmanifoldAttention([4, 64, 81], 4, 81)
-        self.satt2 = SubmanifoldAttention([4, 36, 49], 4, 49)
-        self.satt3 = SubmanifoldAttention([4, 9, 16, 25], 4, 25)
+        self.satt1 = SubmanifoldAttention([4, 36, 49], 4, 49)
+        self.satt2 = SubmanifoldAttention([4, 9, 16, 25], 4, 25)
         self.ract = SPDRectified()
 
         # R2E
@@ -470,16 +468,7 @@ class CgNet3(nn.Module):
         self.linear = nn.Linear(25 * 13, 9, bias=True)
 
     def forward(self, x):
-        x11 = self.ract(self.trans11(x.squeeze()))
-        x12 = self.ract(self.trans12(x.squeeze()))
-        x13 = self.ract(self.trans13(x.squeeze()))
-        x11 = self.subcov11(x11)
-        x12 = self.subcov12(x12)
-        x13 = self.subcov13(x13)
-        x11.extend(x12)
-        x11.extend(x13)
-        x1, shape1 = self.satt1(x11)
-        x1 = self.ract(x1)
+        x1 = self.ract(self.trans1(x.squeeze()))
         x21 = self.ract(self.trans21(x1))
         x22 = self.ract(self.trans22(x1))
         x23 = self.ract(self.trans23(x1))
@@ -488,7 +477,7 @@ class CgNet3(nn.Module):
         x23 = self.subcov23(x23)
         x21.extend(x22)
         x21.extend(x23)
-        x2, shape2 = self.satt2(x21)
+        x2, shape2 = self.satt1(x21)
         x2 = self.ract(x2)
         x31 = self.ract(self.trans31(x2))
         x32 = self.ract(self.trans32(x2))
@@ -501,143 +490,7 @@ class CgNet3(nn.Module):
         x31.extend(x32)
         x31.extend(x33)
         x31.extend(x34)
-        x, shape = self.satt3(x31)
-        x = self.ract(x)
-
-        x = self.tangent(x)
-        x = self.flat(x)
-        x = self.linear(x)
-        return x
-
-
-class CgNet(nn.Module):
-    def __init__(self, epochs):
-        super().__init__()
-        # FE
-        self.trans1 = SPDTransform(100, 80)
-        self.trans2 = SPDTransform(80, 50)
-        self.trans31 = SPDTransform(50, 25)
-        self.trans32 = SPDTransform(50, 25)
-        self.trans33 = SPDTransform(50, 25)
-        self.trans34 = SPDTransform(50, 25)
-
-        # SubManifold
-        self.subcov1 = SubManifold([2])
-        self.subcov2 = SubManifold([3])
-        self.subcov3 = SubManifold([4])
-        self.subcov4 = SubManifold([5])
-
-        # Att
-        self.satt = SubmanifoldAttention([4, 9, 16, 25], 4, 25)
-        self.ract = SPDRectified()
-
-        # R2E
-        self.tangent = SPDTangentSpace(25)
-        self.flat = nn.Flatten()
-        # fc
-        self.linear = nn.Linear(25 * 13, 9, bias=True)
-
-    def forward(self, x):
-        x1 = self.ract(self.trans1(x.squeeze()))
-        x2 = self.ract(self.trans2(x1))
-        x31 = self.ract(self.trans31(x2))
-        x32 = self.ract(self.trans32(x2))
-        x33 = self.ract(self.trans33(x2))
-        x34 = self.ract(self.trans34(x2))
-        x31 = self.subcov1(x31)
-        x32 = self.subcov2(x32)
-        x33 = self.subcov3(x33)
-        x34 = self.subcov4(x34)
-        x31.extend(x32)
-        x31.extend(x33)
-        x31.extend(x34)
-        x, shape = self.satt(x31)
-        x = self.ract(x)
-
-        x = self.tangent(x)
-        x = self.flat(x)
-        x = self.linear(x)
-        return x
-
-
-class FphaNet(nn.Module):
-    def __init__(self, epochs):
-        super().__init__()
-        # FE
-        self.trans1 = SPDTransform(63, 56)
-        self.trans2 = SPDTransform(56, 46)
-        self.trans31 = SPDTransform(46, 36)
-        self.trans32 = SPDTransform(46, 36)
-        self.trans33 = SPDTransform(46, 36)
-
-        # SubManifold
-        self.subcov1 = SubManifold([4])
-        self.subcov2 = SubManifold([5])
-        self.subcov3 = SubManifold([6])
-
-        # Att
-        self.satt = SubmanifoldAttention([16, 25, 36], 4, 36)
-        self.ract = SPDRectified()
-
-        # R2E
-        self.tangent = SPDTangentSpace(36)
-        self.flat = nn.Flatten()
-        # fc
-        self.linear = nn.Linear(18 * 37, 45, bias=True)
-
-    def forward(self, x):
-        x1 = self.ract(self.trans1(x.squeeze()))
-        x2 = self.ract(self.trans2(x1))
-        x31 = self.ract(self.trans31(x2))
-        x32 = self.ract(self.trans32(x2))
-        x33 = self.ract(self.trans33(x2))
-        x31 = self.subcov1(x31)[0]
-        x32 = self.subcov2(x32)[0]
-        x33 = self.subcov3(x33)[0]
-        x, shape = self.satt([x31, x32, x33])
-        x = self.ract(x)
-
-        x = self.tangent(x)
-        x = self.flat(x)
-        x = self.linear(x)
-        return x
-
-
-class MdsdNet(nn.Module):
-    def __init__(self, epochs):
-        super().__init__()
-        # FE
-        self.trans1 = SPDTransform(400, 200)
-        self.trans2 = SPDTransform(200, 100)
-        self.trans31 = SPDTransform(100, 49)
-        self.trans32 = SPDTransform(100, 49)
-        self.trans33 = SPDTransform(100, 49)
-
-        # SubManifold
-        self.subcov1 = SubManifold([2])
-        self.subcov2 = SubManifold([6])
-        self.subcov3 = SubManifold([7])
-
-        # Att
-        self.satt = SubmanifoldAttention([4, 36, 49], 4, 49)
-        self.ract = SPDRectified()
-
-        # R2E
-        self.tangent = SPDTangentSpace(49)
-        self.flat = nn.Flatten()
-        # fc
-        self.linear = nn.Linear(25 * 49, 13, bias=True)
-
-    def forward(self, x):
-        x1 = self.ract(self.trans1(x.squeeze()))
-        x2 = self.ract(self.trans2(x1))
-        x31 = self.ract(self.trans31(x2))
-        x32 = self.ract(self.trans32(x2))
-        x33 = self.ract(self.trans33(x2))
-        x31 = self.subcov1(x31)[0]
-        x32 = self.subcov2(x32)[0]
-        x33 = self.subcov3(x33)[0]
-        x, shape = self.satt([x31, x32, x33])
+        x, shape = self.satt2(x31)
         x = self.ract(x)
 
         x = self.tangent(x)

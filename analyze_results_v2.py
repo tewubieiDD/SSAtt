@@ -110,11 +110,12 @@ class ResultAnalyzer:
 
 # 使用示例
 if __name__ == "__main__":
-    analyzer = ResultAnalyzer(root_dir='outputs/')
+    analyzer = ResultAnalyzer(root_dir='outputs_four_lr/')
 
     # 设定你想要分析的固定参数
     models = ['SSAtt_MAtt']
-    datasets = ['MI', 'SSVEP', 'ERN']
+    # datasets = ['MI', 'SSVEP', 'ERN']
+    datasets = ['ERN']
     lrs = [0.1, 0.05, 0.01, 0.005]
     wds = [0]
 

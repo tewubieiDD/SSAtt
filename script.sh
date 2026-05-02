@@ -14,13 +14,14 @@ echo "正在生成超参数网格搜索任务..."
 
 # ================= 参数定义 =================
 # 超参数搜索空间
-LRS=(0.01 0.001 0.005)
+LRS=(0.01 0.005 0.001 0.0005 0.0001)
 WDS=(0)
+seeds=(42 3407 2026 12345 7)
 
 # 各数据集受试者编号
-subs_bci=(1 2 3 4 5 6 7 8 9)
-subs_mamem=(1 2 3 4 5 6 7 8 9 10 11)
-subs_bcicha=(2 6 7 11 12 13 14 16 17 18 20 21 22 23 24 26)
+#subs_bci=(1 2 3 4 5 6 7 8 9)
+#subs_mamem=(1 2 3 4 5 6 7 8 9 10 11)
+#subs_bcicha=(2 6 7 11 12 13 14 16 17 18 20 21 22 23 24 26)
 
 # ================= 任务生成 =================
 #for lr in "${LRS[@]}"; do
@@ -28,26 +29,64 @@ subs_bcicha=(2 6 7 11 12 13 14 16 17 18 20 21 22 23 24 26)
 for wd in "${WDS[@]}"; do
     for lr in "${LRS[@]}"; do
 
-        # 1. 遍历 BCI 2a 数据集
-        for sub in "${subs_bci[@]}"; do
-            CMD="python SSAtt_bci.py --sub=$sub --lr=$lr --wd=$wd"
+#        # 1. 遍历 BCI 2a 数据集
+#        for sub in "${subs_bci[@]}"; do
+#            CMD="python vl_bci.py --sub=$sub --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+#
+#        # 2. 遍历 MAMEM 数据集
+#        for sub in "${subs_mamem[@]}"; do
+#            CMD="python vl_mamem.py --sub=$sub --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+#
+#        # 3. 遍历 BCI Challenge 数据集
+#        for sub in "${subs_bcicha[@]}"; do
+#            CMD="python vl_bcicha.py --sub=$sub --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+
+        # 遍历 CG 数据集
+#        for seed in "${seeds[@]}"; do
+#            CMD="python vl_cg.py --seed=$seed --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+
+        # 遍历 FPHA 数据集
+#        for seed in "${seeds[@]}"; do
+#            CMD="python vl_fpha.py --model_name='MSNet' --seed=42 --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+
+        # 遍历 MDSD 数据集
+#        for seed in "${seeds[@]}"; do
+#            CMD="python vl_mdsd.py --model_name='MSNet' --seed=42  --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
+
+        # 遍历 FPHA 数据集
+        for seed in "${seeds[@]}"; do
+            CMD="python vl_fpha.py --model_name='SSAtt_MAtt' --seed=$seed --lr=$lr --wd=$wd"
             echo "$CMD" >> "$TASK_FILE"
         done
 
-        # 2. 遍历 MAMEM 数据集
-        for sub in "${subs_mamem[@]}"; do
-            CMD="python SSAtt_mamem.py --sub=$sub --lr=$lr --wd=$wd"
-            echo "$CMD" >> "$TASK_FILE"
-        done
-
-        # 3. 遍历 BCI Challenge 数据集
-        for sub in "${subs_bcicha[@]}"; do
-            CMD="python SSAtt_bcicha.py --sub=$sub --lr=$lr --wd=$wd"
-            echo "$CMD" >> "$TASK_FILE"
-        done
+        # 遍历 MDSD 数据集
+#        for seed in "${seeds[@]}"; do
+#            CMD="python vl_mdsd.py --model_name='SSAtt_MAtt' --seed=$seed  --lr=$lr --wd=$wd"
+#            echo "$CMD" >> "$TASK_FILE"
+#        done
 
     done
 done
+
+#for seed in "${seeds[@]}"; do
+#    CMD="python SSAtt_cg.py --seed=$seed --model_name='MSNet'"
+#    echo "$CMD" >> "$TASK_FILE"
+#done
+#CMD="python SSAtt_cg.py --seed=42 --model_name='MSNet'"
+#echo "$CMD" >> "$TASK_FILE"
+
 
 TOTAL_TASKS=$(wc -l < "$TASK_FILE")
 echo "任务生成完毕！共计 $TOTAL_TASKS 个实验。"

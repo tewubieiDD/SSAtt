@@ -300,7 +300,7 @@ class Res(nn.Module):
         return out
 
 
-class SSAtt_bci(nn.Module):
+class BciNet(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
@@ -359,7 +359,7 @@ class SSAtt_bci(nn.Module):
         return x
 
 
-class SSAtt_mamem(nn.Module):
+class MamemNet(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE
@@ -434,7 +434,7 @@ class SSAtt_mamem(nn.Module):
         return x
 
 
-class SSAtt_cha(nn.Module):
+class ChaNet(nn.Module):
     def __init__(self, epochs):
         super().__init__()
         # FE

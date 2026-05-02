@@ -81,7 +81,7 @@ def check_experiments(root_dir):
 
 if __name__ == "__main__":
     # 指定你的实验结果根目录
-    target_dir = "outputs"
+    target_dir = "outputs_mdsd"
     if os.path.exists(target_dir):
         check_experiments(target_dir)
     else:
