@@ -1,0 +1,10 @@
+__pycache__/
+.idea/
+*.iml
+
+data/
+outputs*/
+results/
+tmp/
+*.pdf
+*.md
